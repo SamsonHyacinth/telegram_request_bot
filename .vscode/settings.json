@@ -1,0 +1,4 @@
+{
+    "python.analysis.logLevel": "Warning",
+    "C_Cpp.codeFolding": "enabled"
+}
