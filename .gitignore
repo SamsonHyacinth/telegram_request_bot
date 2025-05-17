@@ -174,3 +174,4 @@ cython_debug/
 .pypirc
 
 .token/
+request_data.json
