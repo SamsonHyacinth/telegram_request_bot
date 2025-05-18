@@ -7,6 +7,7 @@ from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, filters, MessageHandler
 from telegram.helpers import escape_markdown
 
+
 # Logging configuration
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -24,6 +25,7 @@ DATA_FILE = "request_data.json"
 if not os.path.exists(DATA_FILE):
     with open("request_data.json", "w") as f:
         json.dump({}, f, indent=4)
+
 
 class BotManager:
     def __init__(self):
@@ -275,6 +277,10 @@ async def check_command_for_channel(update: Update, context: ContextTypes.DEFAUL
     command = update.effective_message.text.lower().strip()
     if command.startswith("!collect_channel"):
         await setup_collect_channel(update=update, context=context, from_channel=True)
+
+
+async def help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pass
 
 
 """async def register_commands(application):
