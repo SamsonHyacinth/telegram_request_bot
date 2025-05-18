@@ -5,11 +5,12 @@ import os
 from dotenv import load_dotenv
 from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, filters, MessageHandler
+from telegram.helpers import escape_markdown
 
 # Logging configuration
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG)
+    level=logging.WARNING)
 
 
 # Bot token configuration
@@ -41,10 +42,13 @@ class BotManager:
         return update.effective_user.id in [admin.user.id for admin in admins]
 
 bot_manager = BotManager()
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat:
         await context.bot.send_message(chat_id=update.effective_chat.id,
-                                       text="Hello 🤗! Je suis le gestionnaire des requêtes des chaînes zones. Ajouter moi aux différents canaux pour commencer 😉. `/help`",
+                                       text="Hello 🤗! Je suis le gestionnaire des requêtes des chaînes zones."
+                                            "Ajouter moi aux différents canaux pour commencer 😉. `/help`",
                                        parse_mode = "Markdown")
 
 
@@ -76,7 +80,7 @@ async def setup_request_channel(update: Update, context: ContextTypes.DEFAULT_TY
     chat_id = str(update.effective_chat.id)
 
     if f"{update.message.from_user.id}" in bot_manager.user_stat.keys():
-        user = bot_manager.user_stat[f"{update.message.from_user.id}"]
+        user = bot_manager.user_stat.pop(f"{update.message.from_user.id}")
         if user.get("authorized"):
             data[chat_id] = data.pop(f"temp_{update.message.from_user.id}")
             data[chat_id]["request_title"] = update.effective_chat.title
@@ -89,12 +93,14 @@ async def setup_request_channel(update: Update, context: ContextTypes.DEFAULT_TY
                     await context.bot.send_message(
                         chat_id=data["qg_group"]["id"],
                         text=f"🔔 Nouvelle configuration:\n"
-                            f"Les demandes de: {update.effective_chat.title} seront transferées vers\n"
-                            f"{data[chat_id]["collect_title"]} \n"
-                            f"Par {update.message.from_user.first_name} (@{update.message.from_user.username})")
+                            f"Les demandes de: *{escape_markdown(text=update.effective_chat.title, version=2)}* "
+                            f"seront transferées vers\n"
+                            f"*{escape_markdown(text=data[chat_id]["collect_title"], version=2)}* \n"
+                            f"Par *{escape_markdown(text=update.message.from_user.first_name, version=2)}* "
+                            rf"\(@{escape_markdown(text=update.message.from_user.username, version=2)}\)",
+                        parse_mode="MarkdownV2")
                 except Exception as e:
                     logging.error(f"Erreur notification QG: {e}")
-            bot_manager.user_stat.pop(f"{update.message.from_user.id}")
         return
     
     data[chat_id] = {
@@ -109,24 +115,52 @@ async def setup_request_channel(update: Update, context: ContextTypes.DEFAULT_TY
     }
     
     await bot_manager.save_data(data)
-    await update.message.reply_text(text="📌 Canal de requête enregistré. Utilisez /collect_group dans le groupe de collecte des requêtes correspondant.")
+    await update.message.reply_text(
+        text=r"📌 Canal des requêtes enregistré\. Utilisez `/collect_channel` "
+             "dans le groupe de collecte des requêtes correspondant\n"
+             "‼️ Attention si c'est *dans un canal et non un groupe* dans lequel les requêtes sont collectées "
+             "alors utiliser `!collect_channel`",
+        parse_mode="MarkdownV2")
 
-
-async def setup_collect_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def setup_collect_channel(update: Update, context: ContextTypes.DEFAULT_TYPE, from_channel=False):
     """Set up the request collect channel/groupe"""
+    data = await bot_manager.load_data()
+    collect_chat_id = str(update.effective_chat.id)
+
+    if from_channel:
+        for key in data.keys():
+            if key != "qg_group":
+                if data[key]["collect_id"] is None:
+                    data[key].update({
+                        "collect_id": collect_chat_id,
+                        "collect_title": update.effective_chat.title
+                    })
+                    await bot_manager.save_data(data)
+                    if data["qg_group"]:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=data["qg_group"]["id"],
+                                text=f"🔔 Nouvelle configuration:\n"
+                                     f"Les demandes de: *{escape_markdown(text=data[key]['request_title'],
+                                                                          version=2)}* seront transferées vers\n"
+                                     f"*{escape_markdown(text=update.effective_chat.title, version=2)}*",
+                                parse_mode="MarkdownV2")
+                        except Exception as e:
+                            logging.error(f"Erreur notification QG: {e}")
+                    break
+        return
+
+
     if not await bot_manager.is_admin(update, context):
         await update.message.reply_text("❌ Réservé aux administrateurs")
         return
 
-    data = await bot_manager.load_data()
-    collect_chat_id = str(update.effective_chat.id)
-
     if str(update.message.from_user.id) in bot_manager.user_stat.keys():
-        user = bot_manager.user_stat[f"temp_{update.message.from_user.id}"]
+        user = bot_manager.user_stat.pop(f"{update.message.from_user.id}")
         request_chat_id = str(user.get("request_id"))
         if user.get("authorized"):
-            data[request_chat_id]["collect_id"] = update.effective_chat.title
-            data[request_chat_id]["collect_title"] = update.effective_chat.id
+            data[request_chat_id]["collect_id"] = update.effective_chat.id
+            data[request_chat_id]["collect_title"] = update.effective_chat.title
             await bot_manager.save_data(data)
 
             # Notifier QG group
@@ -135,10 +169,12 @@ async def setup_collect_channel(update: Update, context: ContextTypes.DEFAULT_TY
                     await context.bot.send_message(
                         chat_id=data["qg_group"]["id"],
                         text=f"🔔 Nouvelle configuration:\n"
-                            f"Les demandes de: **{data[request_chat_id]["request_title"]}** seront transferées vers\n"
-                            f"**{update.effective_chat.title}**\n"
-                            f"Par {update.message.from_user.first_name} (@{update.message.from_user.username})",
-                        parse_mode="Markdown")
+                            f"Les demandes de: *{escape_markdown(text=data[request_chat_id]['request_title'],
+                                                                 version=2)}* seront transferées vers\n"
+                            f"*{escape_markdown(text=update.effective_chat.title, version=2)}*\n"
+                            f"Par {escape_markdown(text=update.message.from_user.first_name, version=2)} "
+                            rf"\(@{escape_markdown(text=update.message.from_user.username, version=2)}\)",
+                        parse_mode="MarkdownV2")
                 except Exception as e:
                     logging.error(f"Erreur notification QG: {e}")
         return
@@ -146,8 +182,8 @@ async def setup_collect_channel(update: Update, context: ContextTypes.DEFAULT_TY
     data[f"temp_{update.message.from_user.id}"] = {
         "request_title": None,
         "request_id": None,
-        "collect_id": update.effective_chat.title,
-        "collect_title": collect_chat_id
+        "collect_id": collect_chat_id,
+        "collect_title": update.effective_chat.title
     }
     bot_manager.user_stat[str(update.message.from_user.id)] = {
         "authorized": True,
@@ -155,16 +191,19 @@ async def setup_collect_channel(update: Update, context: ContextTypes.DEFAULT_TY
 
     await bot_manager.save_data(data)
     await update.message.reply_text(
-        text="📌 Canal de collecte des requêtes enregistré. Utilisez /request_group dans le groupe de collecte des requêtes correspondant.")
+        text="📌 Canal de collecte des requêtes enregistré\n"
+             "Utilisez `/request_channel` dans le canal correspondant",
+        parse_mode="MarkdownV2")
 
 
 async def delete_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = bot_manager.load_data()
+    data = await bot_manager.load_data()
     chat_config_to_delete = str(update.effective_chat.id)
-    if not chat_config_to_delete in data.key():
+    if not chat_config_to_delete in data.keys():
         return
 
     deleted_config = data.pop(chat_config_to_delete)
+    await bot_manager.save_data(data)
 
     # Notifier QG group
     if data["qg_group"]:
@@ -172,10 +211,12 @@ async def delete_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=data["qg_group"]["id"],
                 text=f"🔔 Suppression de configuration:\n"
-                     f"Les demandes de: *{deleted_config["request_title"]}* **ne seront plus** transferées vers\n"
-                     f"**{update.effective_chat.title}**\n"
-                     f"Par {update.message.from_user.first_name} (@{update.message.from_user.username})",
-                parse_mode="Markdown")
+                     f"Les demandes de: *{escape_markdown(text=update.effective_chat.title,version=2)}* "
+                     f"*ne seront plus* transferées vers \n"
+                     f"*{escape_markdown(text=deleted_config["collect_title"], version=2)}*\n"
+                     f"Par {escape_markdown(text=update.message.from_user.first_name, version=2)} " 
+                     rf"\(@{escape_markdown(text=update.message.from_user.username, version=2)}\)",
+                parse_mode="MarkdownV2")
         except Exception as e:
             logging.error(f"Erreur notification QG: {e}")
 
@@ -188,7 +229,7 @@ async def handle_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
 
     # Vérifier si le message provient d'un canal configuré
-    if chat_id not in data.key():
+    if chat_id not in data.keys():
         return
 
     channel_data = data[chat_id]
@@ -205,7 +246,8 @@ async def handle_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Formater le message
     request_text = text.replace("#req", "").strip()
     username = update.message.from_user.username or update.message.from_user.first_name
-    message = f"📬 Nouvelle requête de @{username} :\n\n{request_text}"
+    message = (f"📬 Nouvelle requête de @{escape_markdown(text=username, version=2)} :\n"
+               f"*{escape_markdown(text=request_text, version=2)}*")
 
     # Envoyer au groupe de collecte
     try:
@@ -214,21 +256,25 @@ async def handle_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=collect_chat_id,
                 photo=update.message.photo[-1].file_id,
                 caption=message,
-                parse_mode="Markdown"
+                parse_mode="MarkdownV2"
             )
         else:
             await context.bot.send_message(
                 chat_id=collect_chat_id,
                 text=message,
-                parse_mode="Markdown"
+                parse_mode="MarkdownV2"
             )
     except Exception as e:
         logging.error(f"Erreur lors de l'envoi: {e}")
 
+
 async def check_command_for_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    command = update.message.text.lower()
+    if not update.effective_message or not update.effective_message.text:
+        return
+
+    command = update.effective_message.text.lower().strip()
     if command.startswith("!collect_channel"):
-        await setup_collect_channel(update = update, context= context)
+        await setup_collect_channel(update=update, context=context, from_channel=True)
 
 
 """async def register_commands(application):
@@ -252,15 +298,22 @@ if __name__ == '__main__':
     collect_channel_handler = CommandHandler('collect_channel', setup_collect_channel)
     delete_config_handler = CommandHandler('delete_config', delete_config)
     qg_group_handler = CommandHandler('qg', qg_group)
-    collector_handler = MessageHandler(filters.PHOTO or filters.TEXT, handle_requests)
+    collector_handler = MessageHandler(filters.PHOTO | filters.TEXT, handle_requests)
     # Telegram channel don't handler directly bot command
-    request_channel = MessageHandler(filters.ChatType.CHANNEL and filters.TEXT, check_command_for_channel)
+    channel_handler = MessageHandler(
+        filters.ChatType.CHANNEL
+        & filters.TEXT
+        & ~filters.FORWARDED
+        & ~filters.IS_AUTOMATIC_FORWARD,
+        check_command_for_channel
+    )
 
     application.add_handler(start_handler)
     application.add_handler(request_channel_handler)
     application.add_handler(collect_channel_handler)
     application.add_handler(delete_config_handler)
     application.add_handler(qg_group_handler)
+    application.add_handler(channel_handler)
     application.add_handler(collector_handler)
     
     application.run_polling()
